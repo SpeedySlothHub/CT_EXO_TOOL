@@ -16,13 +16,13 @@ function Invoke-StorageMonitor {
         $archiveQuotaRaw = Get-RawBytes $Mbx.ArchiveQuota
         $isArchiveEnabled = ($Mbx.ArchiveStatus -match "Active|Enabled")
 
-        $InitialStats = Get-MailboxStatistics -Identity $Identity -ErrorAction Stop
+        $InitialStats = Get-EXOMailboxStatistics -Identity $Identity -ErrorAction Stop
         $startPrimarySizeMB = [math]::Round((Get-RawBytes $InitialStats.TotalItemSize) / 1MB, 2)
         
         $startArchiveSizeMB = 0
         if ($isArchiveEnabled) {
             try {
-                $initArchiveStats = Get-MailboxStatistics -Identity $Identity -Archive -ErrorAction Stop
+                $initArchiveStats = Get-EXOMailboxStatistics -Identity $Identity -Archive -ErrorAction Stop
                 $startArchiveSizeMB = [math]::Round((Get-RawBytes $initArchiveStats.TotalItemSize) / 1MB, 2)
             } catch { $startArchiveSizeMB = 0 }
         }
@@ -40,7 +40,7 @@ function Invoke-StorageMonitor {
             $Elapsed = (Get-Date) - $StartTime
             $ElapsedClock = $Elapsed.ToString("hh\:mm\:ss")
 
-            $CurrentStats = Get-MailboxStatistics -Identity $Identity -ErrorAction Stop
+            $CurrentStats = Get-EXOMailboxStatistics -Identity $Identity -ErrorAction Stop
             $currentPrimaryBytes = Get-RawBytes $CurrentStats.TotalItemSize
             $currentPrimaryMB = [math]::Round($currentPrimaryBytes / 1MB, 2)
             $primaryItems = $CurrentStats.ItemCount
@@ -49,7 +49,7 @@ function Invoke-StorageMonitor {
             $archiveItems = 0
             if ($isArchiveEnabled) {
                 try {
-                    $CurrentArchive = Get-MailboxStatistics -Identity $Identity -Archive -ErrorAction Stop
+                    $CurrentArchive = Get-EXOMailboxStatistics -Identity $Identity -Archive -ErrorAction Stop
                     $currentArchiveBytes = Get-RawBytes $CurrentArchive.TotalItemSize
                     $currentArchiveMB = [math]::Round($currentArchiveBytes / 1MB, 2)
                     $archiveItems = $CurrentArchive.ItemCount

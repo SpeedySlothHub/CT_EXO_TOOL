@@ -41,6 +41,8 @@ if (-not $SignedIn) {
 }
 
 # --- 4. MAIN ROUTER LOOP ---
+$Global:PSEngineInfo = "PowerShell v$($PSVersionTable.PSVersion.ToString()) ($($PSVersionTable.PSEdition))"
+
 while ($ScriptRunning) {
     Clear-Host
     Write-Host "=====================================================================" -ForegroundColor Cyan
@@ -52,6 +54,7 @@ while ($ScriptRunning) {
     } else {
         Write-Host "$Global:TenantName" -ForegroundColor Green
     }
+    Write-Host " Engine Version:      $Global:PSEngineInfo" -ForegroundColor DarkGray
     Write-Host "---------------------------------------------------------------------"
     Write-Host " 1. Single Mailbox Management (Search & Manage User)"
     Write-Host " 2. Bulk Operations & Reporting Matrix"

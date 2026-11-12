@@ -1,4 +1,10 @@
 function Test-Dependencies {
+    $PSVer = $PSVersionTable.PSVersion.ToString()
+    $EditionStr = if ($PSVersionTable.PSEdition) { $PSVersionTable.PSEdition.ToString() } else { "Desktop" }
+    $IsCore = ($PSVersionTable.PSVersion.Major -ge 7)
+    $EngineLabel = if ($IsCore) { "PowerShell Core 7+ (Parallel Engine Active)" } else { "Windows PowerShell 5.1 (Sequential Mode)" }
+
+    Write-Host "PowerShell Environment: v$PSVer [$EditionStr] - $EngineLabel" -ForegroundColor DarkCyan
     Write-Host "Verifying system prerequisites..." -ForegroundColor Gray
 
     # 1. Check PowerShell Edition/Version

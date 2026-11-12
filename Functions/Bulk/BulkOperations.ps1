@@ -28,17 +28,21 @@ function Invoke-BulkMenu {
                 # Retrieve user and shared mailboxes
                 $RawMailboxes = @(Get-Mailbox -ResultSize Unlimited -RecipientTypeDetails UserMailbox, SharedMailbox -ErrorAction Stop -WarningAction SilentlyContinue)
                 $CacheList = [System.Collections.Generic.List[PSCustomObject]]::new()
-                $Count = 0
                 $Total = $RawMailboxes.Count
 
-                Write-Host "`n[SUCCESS] Discovered $Total mailboxes in tenant. Compiling metrics...`n" -ForegroundColor Green
-                Start-Sleep -Milliseconds 600
+                Write-Host "`n[SUCCESS] Discovered $Total mailboxes in tenant." -ForegroundColor Green
+                Write-Host "Compiling analytics via REST API (Get-EXOMailboxStatistics)...`n" -ForegroundColor Cyan
+                Start-Sleep -Milliseconds 500
 
+                # --- REST-BASED SEQUENTIAL PIPELINE ---
+                # Uses Get-EXOMailboxStatistics (REST/HTTPS) instead of the legacy
+                # Get-MailboxStatistics (WinRM/RPS) for significantly faster performance.
+                $Count = 0
                 foreach ($mbx in $RawMailboxes) {
                     $Count++
                     Write-Progress -Activity "Compiling Tenant Mailbox Analytics" -Status "Processing ($Count/$Total): $($mbx.UserPrincipalName)" -PercentComplete (($Count / $Total) * 100)
 
-                    $stat = Get-MailboxStatistics -Identity $mbx.UserPrincipalName -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+                    $stat = Get-EXOMailboxStatistics -Identity $mbx.UserPrincipalName -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
                     $PrimarySizeBytes = Get-RawBytes $stat.TotalItemSize
                     $PrimarySizeGB = [math]::Round($PrimarySizeBytes / 1GB, 2)
 
@@ -56,7 +60,7 @@ function Invoke-BulkMenu {
                     $ArchiveActive = ($mbx.ArchiveStatus -eq "Active" -or $mbx.ArchiveStatus -eq "Local" -or $mbx.ArchiveStatus -eq "Enabled")
 
                     if ($ArchiveActive) {
-                        $archiveStat = Get-MailboxStatistics -Identity $mbx.UserPrincipalName -Archive -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+                        $archiveStat = Get-EXOMailboxStatistics -Identity $mbx.UserPrincipalName -Archive -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
                         $ArchiveSizeBytes = Get-RawBytes $archiveStat.TotalItemSize
                         $ArchiveSizeGB = [math]::Round($ArchiveSizeBytes / 1GB, 2)
 
@@ -88,8 +92,8 @@ function Invoke-BulkMenu {
                         Selected                  = $false
                     })
                 }
-                
                 Write-Progress -Activity "Compiling Tenant Mailbox Analytics" -Completed
+
                 $Global:CentralMailboxCache = $CacheList
             }
             catch {
