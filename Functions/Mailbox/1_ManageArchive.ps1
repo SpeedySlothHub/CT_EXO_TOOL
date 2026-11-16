@@ -4,6 +4,7 @@ function Invoke-ManageArchive {
     
     while ($ArchivalMenuRunning) {
         Clear-Host
+        Write-Host "Querying mailbox and archiving configuration for $Identity..." -ForegroundColor Gray
         
         try {
             $Mbx = Get-Mailbox -Identity $Identity -ErrorAction Stop
@@ -124,25 +125,6 @@ function Invoke-ManageArchive {
                 Start-Sleep -Seconds 1
             }
         }
-    }
-}
-
-function Get-ArchiveTagsFromPolicy {
-    param([string]$PolicyName)
-    if ([string]::IsNullOrWhiteSpace($PolicyName)) { return @() }
-    try {
-        $Policy = Get-RetentionPolicy -Identity $PolicyName -ErrorAction Stop
-        $Tags = [System.Collections.Generic.List[PSCustomObject]]::new()
-        foreach ($link in $Policy.RetentionPolicyTagLinks) {
-            $tagObj = Get-RetentionPolicyTag -Identity $link -ErrorAction SilentlyContinue
-            if ($tagObj -and $tagObj.RetentionAction -eq "MoveToArchive") {
-                $Tags.Add($tagObj)
-            }
-        }
-        return $Tags
-    }
-    catch {
-        return @()
     }
 }
 

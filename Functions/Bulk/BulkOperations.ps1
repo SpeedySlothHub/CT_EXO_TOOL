@@ -31,16 +31,43 @@ function Invoke-BulkMenu {
                 $Total = $RawMailboxes.Count
 
                 Write-Host "`n[SUCCESS] Discovered $Total mailboxes in tenant." -ForegroundColor Green
-                Write-Host "Compiling analytics via REST API (Get-EXOMailboxStatistics)...`n" -ForegroundColor Cyan
+                Write-Host "Compiling analytics via REST API (Get-EXOMailboxStatistics)..." -ForegroundColor Cyan
+                Write-Host "Tip: Press 'Q' or 'Esc' at any time to stop early and use loaded mailboxes.`n" -ForegroundColor DarkGray
                 Start-Sleep -Milliseconds 500
 
-                # --- REST-BASED SEQUENTIAL PIPELINE ---
-                # Uses Get-EXOMailboxStatistics (REST/HTTPS) instead of the legacy
-                # Get-MailboxStatistics (WinRM/RPS) for significantly faster performance.
+                # --- REST-BASED SEQUENTIAL PIPELINE WITH ETA & CANCEL ---
+                $Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                $Cancelled = $false
                 $Count = 0
                 foreach ($mbx in $RawMailboxes) {
+                    # Non-blocking check for cancellation key
+                    try {
+                        if ([Console]::KeyAvailable) {
+                            $Key = [Console]::ReadKey($true)
+                            if ($Key.Key -in @('Q', 'Escape', 'C')) {
+                                Write-Host "`n[USER STOPPED] Cancellation key received. Finalizing loaded mailboxes..." -ForegroundColor Yellow
+                                $Cancelled = $true
+                                break
+                            }
+                        }
+                    } catch {}
+
                     $Count++
-                    Write-Progress -Activity "Compiling Tenant Mailbox Analytics" -Status "Processing ($Count/$Total): $($mbx.UserPrincipalName)" -PercentComplete (($Count / $Total) * 100)
+                    $Elapsed = $Stopwatch.Elapsed
+                    $ElapsedSec = [math]::Max(0.01, $Elapsed.TotalSeconds)
+                    $AvgSecPerItem = $ElapsedSec / $Count
+                    $RemainingItems = $Total - $Count
+                    $EtaSec = [math]::Round($RemainingItems * $AvgSecPerItem)
+                    $EtaSpan = [TimeSpan]::FromSeconds($EtaSec)
+                    $EtaDisplay = if ($EtaSec -ge 60) {
+                        "{0}m {1:d2}s" -f [int]$EtaSpan.TotalMinutes, $EtaSpan.Seconds
+                    } else {
+                        "{0}s" -f $EtaSec
+                    }
+                    $RateDisplay = [math]::Round($Count / $ElapsedSec, 1)
+
+                    $StatusMsg = "Processing ($Count/$Total): $($mbx.UserPrincipalName) | Rate: $RateDisplay/s | ETA: ~$EtaDisplay (Press 'Q'/Esc to stop)"
+                    Write-Progress -Activity "Compiling Tenant Mailbox Analytics" -Status $StatusMsg -PercentComplete (($Count / $Total) * 100)
 
                     $stat = Get-EXOMailboxStatistics -Identity $mbx.UserPrincipalName -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
                     $PrimarySizeBytes = Get-RawBytes $stat.TotalItemSize
@@ -94,7 +121,20 @@ function Invoke-BulkMenu {
                 }
                 Write-Progress -Activity "Compiling Tenant Mailbox Analytics" -Completed
 
-                $Global:CentralMailboxCache = $CacheList
+                if ($Cancelled) {
+                    if ($CacheList.Count -gt 0) {
+                        Write-Host "`n[NOTICE] Scan stopped. Retaining $($CacheList.Count) mailboxes scanned so far." -ForegroundColor Yellow
+                        Start-Sleep -Seconds 1
+                        $Global:CentralMailboxCache = $CacheList
+                    } else {
+                        Write-Host "`n[NOTICE] Scan aborted before any mailboxes were loaded." -ForegroundColor Yellow
+                        $Global:CentralMailboxCache = $null
+                        Wait-Console
+                        return
+                    }
+                } else {
+                    $Global:CentralMailboxCache = $CacheList
+                }
             }
             catch {
                 Write-Host "`n[CRITICAL ERROR] Failed to capture tenant data: $($_.Exception.Message)" -ForegroundColor Red
@@ -116,6 +156,7 @@ function Invoke-InteractiveMatrixAuditor {
     $PrimaryThreshold = 90
     $ArchiveThreshold = 75
     $FilterLicensedOnly = $true
+    $HideCompliant = $false
 
     $WorkspaceRunning = $true
     while ($WorkspaceRunning) {
@@ -146,6 +187,13 @@ function Invoke-InteractiveMatrixAuditor {
         } else { 
             Write-Host "INACTIVE (Include All)" -ForegroundColor Yellow -NoNewline 
         }
+
+        Write-Host "  |  Compliance Filter: " -NoNewline
+        if ($HideCompliant) {
+            Write-Host "ACTIVE (Hide Compliant)" -ForegroundColor Green -NoNewline
+        } else {
+            Write-Host "INACTIVE (Show All)" -ForegroundColor Gray -NoNewline
+        }
         
         Write-Host ("  |  Loaded: {0} | Selected: {1}" -f $TotalItems, $SelectedCount) -ForegroundColor Green
         Write-Host "=========================================================================================================" -ForegroundColor Gray
@@ -161,6 +209,8 @@ function Invoke-InteractiveMatrixAuditor {
         Write-Host "=========================================================================================================" -ForegroundColor Gray
 
         # Data Display Layer
+        $DisplayedCount = 0
+        $HiddenCount = 0
         foreach ($mbx in $Global:CentralMailboxCache) {
             $TypeStr = if ($mbx.IsSharedMailbox) { "Shared" } else { "User" }
             $LicStr = if ($mbx.IsLicensed) { "Yes" } else { "No" }
@@ -182,14 +232,27 @@ function Invoke-InteractiveMatrixAuditor {
             $QualifiesPrimary = (-not $mbx.ArchiveEnabled -and $mbx.PrimaryPercentUsed -ge $PrimaryThreshold)
             $QualifiesArchive = ($mbx.ArchiveEnabled -and -not $mbx.AutoExpandingArchiveReady -and $mbx.ArchivePercentUsed -ge $ArchiveThreshold)
             $PassesLicense = (-not $FilterLicensedOnly -or $mbx.IsLicensed)
+            $IsActionRequired = ($QualifiesPrimary -or $QualifiesArchive) -and $PassesLicense
+
+            # Filter out compliant mailboxes if toggle is enabled (unless user has explicitly selected it)
+            if ($HideCompliant -and -not $IsActionRequired -and -not $mbx.Selected) {
+                $HiddenCount++
+                continue
+            }
+            $DisplayedCount++
 
             if ($mbx.Selected) {
                 Write-Host $RowString -ForegroundColor Green
-            } elseif (($Global:ActiveView -eq "Storage") -and ($QualifiesPrimary -or $QualifiesArchive) -and $PassesLicense) {
+            } elseif (($Global:ActiveView -eq "Storage") -and $IsActionRequired) {
                 Write-Host $RowString -ForegroundColor Cyan
             } else {
                 Write-Host $RowString -ForegroundColor Gray
             }
+        }
+
+        if ($DisplayedCount -eq 0 -and $HideCompliant) {
+            Write-Host "`n   >>> ALL $TotalItems MAILBOXES ARE CURRENTLY COMPLIANT WITH ACTIVE RULES! <<<" -ForegroundColor Green
+            Write-Host "   (Press [H] to toggle view back to Show All, or [T] to adjust rule thresholds)`n" -ForegroundColor DarkGray
         }
 
         Write-Host "=========================================================================================================" -ForegroundColor Gray
@@ -197,8 +260,9 @@ function Invoke-InteractiveMatrixAuditor {
         Write-Host "  [#] Toggle index state (e.g. 1 or 1,3,5) | [A] Select All | [D] Clear All" -ForegroundColor Gray
         Write-Host "  [V1] Switch to Storage View              | [V2] Switch to Delegation View" -ForegroundColor White
         Write-Host "  [T]  Set Threshold Limits                | [L]  Toggle License Filter" -ForegroundColor Gray
-        Write-Host "  [F]  Auto-Select by Thresholds           | [E]  Export Current Data to CSV" -ForegroundColor Yellow
-        Write-Host "  [R]  Force Refresh & Rescan Metrics      | [0]  Return to Main Menu" -ForegroundColor DarkGray
+        Write-Host "  [H]  Toggle Hide Compliant Mailboxes     | [F]  Auto-Select by Thresholds" -ForegroundColor Cyan
+        Write-Host "  [E]  Export Current Data to CSV          | [R]  Force Refresh & Rescan Metrics" -ForegroundColor Yellow
+        Write-Host "  [0]  Return to Main Menu" -ForegroundColor DarkGray
         Write-Host "---------------------------------------------------------------------------------------------------------" -ForegroundColor Gray
         
         # Contextual action menus
@@ -240,6 +304,12 @@ function Invoke-InteractiveMatrixAuditor {
             { $_ -in @("V1", "VIEW1") } { $Global:ActiveView = "Storage"; continue }
             { $_ -in @("V2", "VIEW2") } { $Global:ActiveView = "Delegation"; continue }
 
+            # Toggle Hide Compliant
+            { $_ -in @("H", "HIDE", "COMPLIANT") } {
+                $HideCompliant = -not $HideCompliant
+                continue
+            }
+
             # Storage Mode Toggle
             { $_ -in @("STOR0", "MODE") -and $Global:ActiveView -eq "Storage" } {
                 $Global:StorageAction = if ($Global:StorageAction -eq "Enable") { "Disable" } else { "Enable" }
@@ -271,13 +341,14 @@ function Invoke-InteractiveMatrixAuditor {
                     continue 
                 }
 
-                $DelegateUser = (Read-Host "Enter the UPN of the delegate receiving/losing access").Trim()
-                if ([string]::IsNullOrWhiteSpace($DelegateUser)) { continue }
+                $delegateMbx = Resolve-MailboxIdentity -Prompt "Enter delegate user receiving/losing access (Name, Alias, or UPN)" -AllowCancel
+                if ($null -eq $delegateMbx) { continue }
+                $DelegateUser = $delegateMbx.UserPrincipalName
 
                 Clear-Host
                 Write-Host "=====================================================================" -ForegroundColor Magenta
                 Write-Host " BULK DELEGATION: $Global:DelegateAction $Global:SelectedDelegation" -ForegroundColor Magenta
-                Write-Host " Delegate User:   $DelegateUser" -ForegroundColor White
+                Write-Host " Delegate User:   $($delegateMbx.DisplayName) ($DelegateUser)" -ForegroundColor White
                 Write-Host " Target Count:    $($Targets.Count) mailboxes" -ForegroundColor Yellow
                 Write-Host "=====================================================================" -ForegroundColor Magenta
                 

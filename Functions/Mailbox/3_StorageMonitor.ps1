@@ -5,8 +5,9 @@ function Invoke-StorageMonitor {
     $MonitoringUser = $true
 
     Clear-Host
-    Write-Host "Connecting to mailbox telemetry..." -ForegroundColor Gray
+    Write-Host "Connecting to mailbox telemetry for $Identity..." -ForegroundColor Gray
     try {
+        Write-Host " -> Retrieving mailbox configuration and quotas..." -ForegroundColor DarkGray
         $Mbx = Get-Mailbox -Identity $Identity -ErrorAction Stop
         $mbxCreated = if ($Mbx.WhenCreated) { $Mbx.WhenCreated.ToString("yyyy-MM-dd") } else { "Unknown" }
         $mbxAgeDays = if ($Mbx.WhenCreated) { [math]::Round(((Get-Date) - $Mbx.WhenCreated).TotalDays) } else { 0 }
@@ -16,17 +17,20 @@ function Invoke-StorageMonitor {
         $archiveQuotaRaw = Get-RawBytes $Mbx.ArchiveQuota
         $isArchiveEnabled = ($Mbx.ArchiveStatus -match "Active|Enabled")
 
+        Write-Host " -> Querying primary storage statistics (REST)..." -ForegroundColor DarkGray
         $InitialStats = Get-EXOMailboxStatistics -Identity $Identity -ErrorAction Stop
         $startPrimarySizeMB = [math]::Round((Get-RawBytes $InitialStats.TotalItemSize) / 1MB, 2)
         
         $startArchiveSizeMB = 0
         if ($isArchiveEnabled) {
             try {
+                Write-Host " -> Querying online archive statistics..." -ForegroundColor DarkGray
                 $initArchiveStats = Get-EXOMailboxStatistics -Identity $Identity -Archive -ErrorAction Stop
                 $startArchiveSizeMB = [math]::Round((Get-RawBytes $initArchiveStats.TotalItemSize) / 1MB, 2)
             } catch { $startArchiveSizeMB = 0 }
         }
 
+        Write-Host " -> Resolving retention policy tags..." -ForegroundColor DarkGray
         $archiveTags = if ($Mbx.RetentionPolicy) { Get-ArchiveTagsFromPolicy -PolicyName $Mbx.RetentionPolicy } else { @() }
     } catch {
         Write-Host "Error acquiring mailbox data: $($_.Exception.Message)" -ForegroundColor Red

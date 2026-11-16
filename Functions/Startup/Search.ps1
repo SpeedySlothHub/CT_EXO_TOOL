@@ -1,59 +1,79 @@
-function Invoke-Search {
+function Resolve-MailboxIdentity {
+    param(
+        [string]$InitialQuery = "",
+        [string]$Prompt = "Search Mailbox (Display Name, Alias, or UPN)",
+        [switch]$AllowCancel,
+        [switch]$AllowSkip
+    )
+
     if ($Global:TenantName -eq "Disconnected") {
-        Clear-Host
-        Write-Host "=====================================================================" -ForegroundColor Red
-        Write-Host "                         NO ACTIVE CONNECTION                        " -ForegroundColor Red
-        Write-Host "=====================================================================" -ForegroundColor Red
-        Write-Host "You must authenticate to Exchange Online before searching for mailboxes." -ForegroundColor Yellow
-        Wait-Console "Press Enter to return..."
+        Write-Host "`n[ERROR] No active Exchange Online connection." -ForegroundColor Red
         return $null
     }
 
+    $FirstAttempt = $true
     while ($true) {
-        Clear-Host
-        Write-Host "=====================================================================" -ForegroundColor Cyan
-        Write-Host "                           USER MAILBOX LOOKUP                       " -ForegroundColor Cyan
-        Write-Host "=====================================================================" -ForegroundColor Cyan
-        Write-Host "Search by Display Name, UserPrincipalName (Email), or Alias." -ForegroundColor Gray
-        Write-Host "Enter '0' at any time to return to the main menu.`n" -ForegroundColor DarkGray
+        if ($FirstAttempt -and -not [string]::IsNullOrWhiteSpace($InitialQuery)) {
+            $Query = $InitialQuery.Trim()
+            $FirstAttempt = $false
+        } else {
+            $CancelHint = if ($AllowSkip) { " (or press Enter to search all/skip)" } elseif ($AllowCancel) { " (or '0' to cancel)" } else { " (or '0' to return)" }
+            Write-Host "`n$Prompt$CancelHint" -ForegroundColor Cyan
+            $Query = (Read-Host "Search Term").Trim()
+            $FirstAttempt = $false
+        }
 
-        $Query = (Read-Host "Search Term").Trim()
+        if ($AllowSkip -and [string]::IsNullOrWhiteSpace($Query)) {
+            return $null
+        }
 
         if ($Query -eq "0" -or [string]::IsNullOrWhiteSpace($Query)) {
             return $null
         }
 
-        Write-Host "Searching Exchange Online directory..." -ForegroundColor Gray
+        Write-Host "Searching Exchange Online directory for '$Query'..." -ForegroundColor Gray
         
         try {
+            # 1. Direct exact UPN / PrimarySmtpAddress check if input contains '@'
+            if ($Query -match '@') {
+                $Exact = Get-Mailbox -Identity $Query -ErrorAction SilentlyContinue
+                if ($Exact) {
+                    Write-Host "Direct Match: $($Exact.DisplayName) ($($Exact.UserPrincipalName))" -ForegroundColor Green
+                    return $Exact
+                }
+            }
+
+            # 2. Ambiguous Name Resolution (ANR) or prefix lookup
             if ($Query.Length -lt 3) {
                 # Fallback for short prefix queries (1-2 chars)
                 $FilterString = "DisplayName -like '$Query*' -or Alias -like '$Query*' -or UserPrincipalName -like '$Query*'"
-                [array]$Results = Get-Mailbox -ResultSize 50 -Filter $FilterString -ErrorAction Stop
+                [array]$Results = @(Get-Mailbox -ResultSize 50 -Filter $FilterString -ErrorAction Stop)
             } else {
                 # High-speed Ambiguous Name Resolution for 3+ characters
-                [array]$Results = Get-Mailbox -ResultSize 50 -Anr $Query -ErrorAction Stop
+                [array]$Results = @(Get-Mailbox -ResultSize 50 -Anr $Query -ErrorAction Stop)
             }
         }
         catch {
-            Write-Host "`n[SEARCH ERROR] Directory lookup failed." -ForegroundColor Red
-            Write-Host "Details: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "`n[SEARCH ERROR] Directory lookup failed: $($_.Exception.Message)" -ForegroundColor Red
+            if ($AllowSkip) { return $null }
             Wait-Console "Press Enter to try again..."
             continue
         }
 
         if ($Results.Count -eq 0) {
-            Write-Host "`nNo mailboxes found matching '$Query'." -ForegroundColor Yellow
-            Start-Sleep -Seconds 1.5
+            Write-Host "`n[NOTICE] No mailboxes found matching '$Query'." -ForegroundColor Yellow
+            if ($AllowSkip) { return $null }
+            Start-Sleep -Seconds 1
             continue
         }
 
         # Scenario A: Exactly one match found
         if ($Results.Count -eq 1) {
+            Write-Host "Matched: $($Results[0].DisplayName) ($($Results[0].UserPrincipalName))" -ForegroundColor Green
             return $Results[0]
         }
 
-        # Scenario B: Multiple matches found
+        # Scenario B: Multiple matches found - present interactive selection table
         Write-Host "`nFound $($Results.Count) matching mailboxes for '$Query':" -ForegroundColor Cyan
         Write-Host "---------------------------------------------------------------------"
         $FormatStr = "{0,-4} {1,-32} {2,-35}"
@@ -80,4 +100,14 @@ function Invoke-Search {
         Write-Host "Invalid selection number." -ForegroundColor Red
         Start-Sleep -Seconds 1
     }
+}
+
+function Invoke-Search {
+    Clear-Host
+    Write-Host "=====================================================================" -ForegroundColor Cyan
+    Write-Host "                           USER MAILBOX LOOKUP                       " -ForegroundColor Cyan
+    Write-Host "=====================================================================" -ForegroundColor Cyan
+    Write-Host "Search by Display Name, UserPrincipalName (Email), or Alias." -ForegroundColor Gray
+    Write-Host "Enter '0' at any time to return to the main menu.`n" -ForegroundColor DarkGray
+    return (Resolve-MailboxIdentity -Prompt "Enter mailbox to manage" -AllowCancel)
 }

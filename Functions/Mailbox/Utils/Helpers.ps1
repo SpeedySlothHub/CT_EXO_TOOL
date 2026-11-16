@@ -51,6 +51,65 @@ function Format-StorageSizeGB {
     return [math]::Round($Bytes / 1GB, 2)
 }
 
+function Clear-PolicyTagCache {
+    $Global:TenantRetentionTagCache = $null
+    $Global:TenantRetentionPolicyCache = $null
+}
+
+function Get-ArchiveTagsFromPolicy {
+    param([string]$PolicyName)
+    if ([string]::IsNullOrWhiteSpace($PolicyName)) { return @() }
+    
+    # In-memory session cache for tenant retention tags to prevent N individual roundtrips
+    if ($null -eq $Global:TenantRetentionTagCache) {
+        try {
+            $allTags = @(Get-RetentionPolicyTag -ResultSize Unlimited -ErrorAction SilentlyContinue)
+            $Global:TenantRetentionTagCache = @{}
+            foreach ($t in $allTags) {
+                if ($t.Name) { $Global:TenantRetentionTagCache[$t.Name] = $t }
+                if ($t.Identity) { $Global:TenantRetentionTagCache[$t.Identity.ToString()] = $t }
+                if ($t.Guid) { $Global:TenantRetentionTagCache[$t.Guid.ToString()] = $t }
+            }
+        }
+        catch {
+            $Global:TenantRetentionTagCache = @{}
+        }
+    }
+
+    try {
+        if ($null -eq $Global:TenantRetentionPolicyCache) { $Global:TenantRetentionPolicyCache = @{} }
+        if (-not $Global:TenantRetentionPolicyCache.ContainsKey($PolicyName)) {
+            $Policy = Get-RetentionPolicy -Identity $PolicyName -ErrorAction Stop
+            $Global:TenantRetentionPolicyCache[$PolicyName] = $Policy
+        } else {
+            $Policy = $Global:TenantRetentionPolicyCache[$PolicyName]
+        }
+
+        $Tags = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($link in $Policy.RetentionPolicyTagLinks) {
+            $linkStr = $link.ToString()
+            $tagObj = $null
+            if ($Global:TenantRetentionTagCache.ContainsKey($linkStr)) {
+                $tagObj = $Global:TenantRetentionTagCache[$linkStr]
+            } else {
+                # Fallback in case tag was created after initial cache
+                $tagObj = Get-RetentionPolicyTag -Identity $link -ErrorAction SilentlyContinue
+                if ($tagObj) { 
+                    $Global:TenantRetentionTagCache[$linkStr] = $tagObj 
+                    if ($tagObj.Name) { $Global:TenantRetentionTagCache[$tagObj.Name] = $tagObj }
+                }
+            }
+            if ($tagObj -and $tagObj.RetentionAction -eq "MoveToArchive") {
+                $Tags.Add($tagObj)
+            }
+        }
+        return $Tags
+    }
+    catch {
+        return @()
+    }
+}
+
 function Get-CalendarFolderPath {
     param([string]$UserPrincipalName)
     try {

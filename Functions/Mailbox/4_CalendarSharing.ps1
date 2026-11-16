@@ -86,8 +86,9 @@ function Add-CalendarDelegate {
     Write-Host "=====================================================================" -ForegroundColor Cyan
     Write-Host " Target Calendar: $CalendarPath" -ForegroundColor Gray
     
-    $DelegateUPN = (Read-Host "`nEnter the UPN or Email of the user receiving access (or 0 to cancel)").Trim()
-    if ($DelegateUPN -eq "0" -or [string]::IsNullOrWhiteSpace($DelegateUPN)) { return }
+    $delegateMbx = Resolve-MailboxIdentity -Prompt "Enter delegate receiving access (Name, Alias, or UPN)" -AllowCancel
+    if ($null -eq $delegateMbx) { return }
+    $DelegateUPN = $delegateMbx.UserPrincipalName
 
     Write-Host "`nSelect Permission Role for $($DelegateUPN):" -ForegroundColor Yellow
     Write-Host " 1. AvailabilityOnly  (Free/Busy time only)"
@@ -210,8 +211,9 @@ function Show-InboundDelegations {
 
     switch ($DiscoveryChoice) {
         "1" {
-            $SpecificUPN = (Read-Host "`nEnter mailbox UPN or email to inspect").Trim()
-            if ([string]::IsNullOrWhiteSpace($SpecificUPN)) { return }
+            $specificMbx = Resolve-MailboxIdentity -Prompt "Enter mailbox to inspect (Name, Alias, or UPN)" -AllowCancel
+            if ($null -eq $specificMbx) { return }
+            $SpecificUPN = $specificMbx.UserPrincipalName
 
             Write-Host "Checking calendar permissions on $SpecificUPN..." -ForegroundColor Gray
             try {

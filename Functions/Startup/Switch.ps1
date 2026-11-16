@@ -6,6 +6,7 @@ function Clear-SessionState {
     $Global:StorageAction = "Enable"
     $Global:DelegateAction = "Grant"
     $Global:SelectedDelegation = "None"
+    Clear-PolicyTagCache
 }
 
 function Invoke-SwitchTenant {
